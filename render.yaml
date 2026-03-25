@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: tebex-telegram-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
