@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import os
+import json
 from datetime import datetime, timezone
 
 app = Flask(__name__)
@@ -8,7 +9,30 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
-processed_events = set()
+DB_FILE = "processed_events.json"
+
+
+def load_processed():
+    if not os.path.exists(DB_FILE):
+        return set()
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return set(data)
+    except Exception:
+        return set()
+
+
+def save_processed(processed):
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(processed), f, ensure_ascii=False)
+    except Exception as e:
+        print("Save processed error:", e)
+
+
+processed_events = load_processed()
+
 
 def send_telegram(text: str):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -16,92 +40,121 @@ def send_telegram(text: str):
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
     try:
-        requests.post(
+        r = requests.post(
             url,
-            json={"chat_id": CHAT_ID, "text": text},
+            json={
+                "chat_id": CHAT_ID,
+                "text": text,
+            },
             timeout=10,
         )
+        print("Telegram status:", r.status_code, r.text)
     except Exception as e:
         print("Telegram send error:", e)
+
 
 @app.get("/")
 def home():
     return "OK", 200
 
+
 @app.post("/webhook")
 def webhook():
-    data = request.get_json(silent=True) or {}
+    try:
+        data = request.get_json(silent=True) or {}
+        print("Incoming webhook:", data)
 
-    event_type = data.get("type")
-    event_id = str(data.get("id", ""))  # Tebex webhook event id
-    subject = data.get("subject", {}) or {}
+        event_type = data.get("type", "")
+        event_id = str(data.get("id", "")).strip()
+        subject = data.get("subject", {}) or {}
 
-    # validation webhook
-    if event_type == "validation.webhook":
-        return jsonify({"id": data.get("id")}), 200
+        # validation webhook
+        if event_type == "validation.webhook":
+            return jsonify({"id": data.get("id")}), 200
 
-    # защита от дубля
-    if event_id and event_id in processed_events:
-        print("Duplicate event skipped:", event_id)
+        # защита от дубля
+        if event_id and event_id in processed_events:
+            print("Duplicate event skipped:", event_id)
+            return "ok", 200
+
+        price = subject.get("price", {}) or {}
+        customer = subject.get("customer", {}) or {}
+        status = subject.get("status", {}) or {}
+
+        amount = price.get("amount", "—")
+        currency = price.get("currency", "")
+        email = customer.get("email", "—")
+
+        first_name = customer.get("first_name", "") or ""
+        last_name = customer.get("last_name", "") or ""
+        full_name = f"{first_name} {last_name}".strip() or customer.get("username", "—")
+
+        payment_method = subject.get("payment_method", {}) or {}
+        method = payment_method.get("name", "—")
+
+        transaction_id = subject.get("transaction_id", "—")
+
+        created_at = subject.get("created_at")
+        if created_at:
+            try:
+                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except Exception:
+                dt = datetime.now(timezone.utc)
+        else:
+            dt = datetime.now(timezone.utc)
+
+        date_str = dt.strftime("%d.%m.%Y")
+        time_str = dt.strftime("%H:%M")
+
+        text = None
+
+        if event_type == "payment.completed":
+            text = (
+                f"✅ Успешная оплата\n\n"
+                f"📅 Дата: {date_str}\n"
+                f"🕒 Время: {time_str}\n"
+                f"💰 Сумма: {amount} {currency}\n"
+                f"👤 ФИО: {full_name}\n"
+                f"📧 Почта: {email}\n"
+                f"💳 Оплата: {method}\n"
+                f"🧾 Transaction ID: {transaction_id}"
+            )
+
+        elif event_type == "payment.declined":
+            reason = subject.get("decline_reason") or "Причина не указана"
+            if isinstance(reason, dict):
+                reason = reason.get("message", "Причина не указана")
+
+            text = (
+                f"❌ Оплата отклонена\n\n"
+                f"📅 Дата: {date_str}\n"
+                f"🕒 Время: {time_str}\n"
+                f"💰 Сумма: {amount} {currency}\n"
+                f"👤 ФИО: {full_name}\n"
+                f"📧 Почта: {email}\n"
+                f"💳 Оплата: {method}\n"
+                f"⚠️ Причина: {reason}\n"
+                f"🧾 Transaction ID: {transaction_id}"
+            )
+
+        if text:
+            send_telegram(text)
+
+        # сохраняем event_id только после обработки
+        if event_id:
+            processed_events.add(event_id)
+            save_processed(processed_events)
+
         return "ok", 200
 
-    if event_id:
-        processed_events.add(event_id)
+    except Exception as e:
+        print("Webhook error:", e)
+        # ВАЖНО: всё равно отдаем 200, чтобы Tebex не спамил retry
+        return "ok", 200
 
-    price_paid = subject.get("price_paid", {}) or {}
-    payment_method = subject.get("payment_method", {}) or {}
-    customer = subject.get("customer", {}) or {}
-
-    amount = price_paid.get("amount", "—")
-    currency = price_paid.get("currency", "")
-    method = payment_method.get("name", "—")
-
-    first_name = customer.get("first_name", "") or ""
-    last_name = customer.get("last_name", "") or ""
-    full_name = f"{first_name} {last_name}".strip() or customer.get("username", "—")
-    email = customer.get("email", "—")
-
-    created_at = subject.get("created_at")
-    if created_at:
-        try:
-            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        except Exception:
-            dt = datetime.now(timezone.utc)
-    else:
-        dt = datetime.now(timezone.utc)
-
-    date_str = dt.strftime("%d.%m.%Y")
-    time_str = dt.strftime("%H:%M")
-
-    if event_type == "payment.completed":
-        text = (
-            f"✅ Успешная оплата\n\n"
-            f"📅 Дата: {date_str}\n"
-            f"🕒 Время: {time_str}\n"
-            f"💰 Сумма: {amount} {currency}\n"
-            f"👤 ФИО: {full_name}\n"
-            f"📧 Почта: {email}\n"
-            f"💳 Оплата: {method}"
-        )
-        send_telegram(text)
-
-    elif event_type == "payment.declined":
-        reason = ((subject.get("decline_reason", {}) or {}).get("message")) or "Причина не указана"
-        text = (
-            f"❌ Оплата отклонена\n\n"
-            f"📅 Дата: {date_str}\n"
-            f"🕒 Время: {time_str}\n"
-            f"💰 Сумма: {amount} {currency}\n"
-            f"👤 ФИО: {full_name}\n"
-            f"📧 Почта: {email}\n"
-            f"💳 Оплата: {method}\n"
-            f"⚠️ Причина: {reason}"
-        )
-        send_telegram(text)
-
-    return "ok", 200
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "3000"))
+    port = int(os.getenv("PORT", "10000"))
     app.run(host="0.0.0.0", port=port)
