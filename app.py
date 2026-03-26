@@ -76,12 +76,12 @@ def webhook():
 
     if event_type == "payment.completed":
         text = (
-            f"✅ Успешная оплата\\n\\n"
-            f"📅 Дата: {date_str}\\n"
-            f"🕒 Время: {time_str}\\n"
-            f"💰 Сумма: {amount} {currency}\\n"
-            f"👤 ФИО: {full_name}\\n"
-            f"📧 Почта: {email}\\n"
+            f"✅ Успешная оплата\n\n"
+            f"📅 Дата: {date_str}\n"
+            f"🕒 Время: {time_str}\n"
+            f"💰 Сумма: {amount} {currency}\n"
+            f"👤 ФИО: {full_name}\n"
+            f"📧 Почта: {email}\n"
             f"💳 Оплата: {method}"
         )
         send_telegram(text)
@@ -89,13 +89,13 @@ def webhook():
     elif event_type == "payment.declined":
         reason = ((subject.get("decline_reason", {}) or {}).get("message")) or "Причина не указана"
         text = (
-            f"❌ Оплата отклонена\\n\\n"
-            f"📅 Дата: {date_str}\\n"
-            f"🕒 Время: {time_str}\\n"
-            f"💰 Сумма: {amount} {currency}\\n"
-            f"👤 ФИО: {full_name}\\n"
-            f"📧 Почта: {email}\\n"
-            f"💳 Оплата: {method}\\n"
+            f"❌ Оплата отклонена\n\n"
+            f"📅 Дата: {date_str}\n"
+            f"🕒 Время: {time_str}\n"
+            f"💰 Сумма: {amount} {currency}\n"
+            f"👤 ФИО: {full_name}\n"
+            f"📧 Почта: {email}\n"
+            f"💳 Оплата: {method}\n"
             f"⚠️ Причина: {reason}"
         )
         send_telegram(text)
