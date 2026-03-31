@@ -55,6 +55,15 @@ def send_telegram(text: str):
         print("Telegram send error:", e)
 
 
+def parse_dt(created_at: str):
+    if created_at:
+        try:
+            return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
 @app.get("/")
 def home():
     return "OK", 200
@@ -70,23 +79,21 @@ def webhook():
         event_id = str(data.get("id", "")).strip()
         subject = data.get("subject", {}) or {}
 
-        # validation webhook
         if event_type == "validation.webhook":
             return jsonify({"id": data.get("id")}), 200
 
-        # защита от дубля
         if event_id and event_id in processed_events:
             print("Duplicate event skipped:", event_id)
             return "ok", 200
 
-        price = subject.get("price", {}) or {}
-        customer = subject.get("customer", {}) or {}
-        status = subject.get("status", {}) or {}
+        transaction_id = subject.get("transaction_id", "—")
 
+        price = subject.get("price", {}) or {}
         amount = price.get("amount", "—")
         currency = price.get("currency", "")
-        email = customer.get("email", "—")
 
+        customer = subject.get("customer", {}) or {}
+        email = customer.get("email", "—")
         first_name = customer.get("first_name", "") or ""
         last_name = customer.get("last_name", "") or ""
         full_name = f"{first_name} {last_name}".strip() or customer.get("username", "—")
@@ -94,17 +101,8 @@ def webhook():
         payment_method = subject.get("payment_method", {}) or {}
         method = payment_method.get("name", "—")
 
-        transaction_id = subject.get("transaction_id", "—")
-
         created_at = subject.get("created_at")
-        if created_at:
-            try:
-                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-            except Exception:
-                dt = datetime.now(timezone.utc)
-        else:
-            dt = datetime.now(timezone.utc)
-
+        dt = parse_dt(created_at)
         date_str = dt.strftime("%d.%m.%Y")
         time_str = dt.strftime("%H:%M")
 
@@ -139,10 +137,62 @@ def webhook():
                 f"🧾 Transaction ID: {transaction_id}"
             )
 
+        elif event_type == "payment.dispute.opened":
+            reason = subject.get("reason") or "Причина не указана"
+            if isinstance(reason, dict):
+                reason = reason.get("message", "Причина не указана")
+
+            text = (
+                f"🚨 Чарджбек открыт\n\n"
+                f"📅 Дата: {date_str}\n"
+                f"🕒 Время: {time_str}\n"
+                f"💰 Сумма: {amount} {currency}\n"
+                f"👤 ФИО: {full_name}\n"
+                f"📧 Почта: {email}\n"
+                f"💳 Оплата: {method}\n"
+                f"⚠️ Причина: {reason}\n"
+                f"🧾 Transaction ID: {transaction_id}"
+            )
+
+        elif event_type == "payment.dispute.won":
+            text = (
+                f"🟢 Чарджбек выигран\n\n"
+                f"📅 Дата: {date_str}\n"
+                f"🕒 Время: {time_str}\n"
+                f"💰 Сумма: {amount} {currency}\n"
+                f"👤 ФИО: {full_name}\n"
+                f"📧 Почта: {email}\n"
+                f"💳 Оплата: {method}\n"
+                f"🧾 Transaction ID: {transaction_id}"
+            )
+
+        elif event_type == "payment.dispute.lost":
+            text = (
+                f"🔴 Чарджбек проигран\n\n"
+                f"📅 Дата: {date_str}\n"
+                f"🕒 Время: {time_str}\n"
+                f"💰 Сумма: {amount} {currency}\n"
+                f"👤 ФИО: {full_name}\n"
+                f"📧 Почта: {email}\n"
+                f"💳 Оплата: {method}\n"
+                f"🧾 Transaction ID: {transaction_id}"
+            )
+
+        elif event_type == "payment.dispute.closed":
+            text = (
+                f"📁 Чарджбек закрыт\n\n"
+                f"📅 Дата: {date_str}\n"
+                f"🕒 Время: {time_str}\n"
+                f"💰 Сумма: {amount} {currency}\n"
+                f"👤 ФИО: {full_name}\n"
+                f"📧 Почта: {email}\n"
+                f"💳 Оплата: {method}\n"
+                f"🧾 Transaction ID: {transaction_id}"
+            )
+
         if text:
             send_telegram(text)
 
-        # сохраняем event_id только после обработки
         if event_id:
             processed_events.add(event_id)
             save_processed(processed_events)
@@ -151,7 +201,6 @@ def webhook():
 
     except Exception as e:
         print("Webhook error:", e)
-        # ВАЖНО: всё равно отдаем 200, чтобы Tebex не спамил retry
         return "ok", 200
 
 
